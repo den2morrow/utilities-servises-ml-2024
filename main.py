@@ -85,6 +85,18 @@ class AddressExtractor:
 
         return messages
 
+    def extract_uuids(self, text: str) -> str:
+        uuids = ''
+        ext_addresses = self.extract_addresses_from_comment(text)
+
+        for address in ext_addresses.split('\n'):
+            address_type, number = address.split(',')
+            matches_houses = self.find_match_house_uuid(self.addresses, address_type, number)
+            uuids += matches_houses + ','
+
+        return uuids[:-1]
+
+
     def extract_addresses_from_comment(self, comment: str) -> str:
         """Extract addresses from a given comment."""
         prompt = self.create_prompt(comment)
@@ -111,20 +123,18 @@ class AddressExtractor:
         return ','.join(matching_houses)
 
 
+
+
 def main():
     addresses = pd.read_csv('/content/drive/MyDrive/saved_datasets/VolgaIT_2024_semifinal/volgait2024-semifinal-addresses.csv', delimiter=';')
     tasks = pd.read_csv('/content/drive/MyDrive/saved_datasets/VolgaIT_2024_semifinal/volgait2024-semifinal-task.csv', delimiter=';')
-
-
     extractor = AddressExtractor(userdata.get('qroq'))
-    test_text = tasks.iloc[0]['comment']
-    ext_addresses = extractor.extract_addresses_from_comment(test_text)
-    text_addresses = ext_addresses.split('\n')
 
-    for address in text_addresses:
-        address_type, number = address.split(',')
-        print(f"{address_type} {number} {extractor.find_match_house_uuid(addresses, address_type, number)}")
 
+    for task in tasks['comment']:
+        uuids = ''
+        test_text = tasks.iloc[0]['comment']
+        
 
 if __name__ == "__main__":
   main()

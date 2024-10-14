@@ -1,33 +1,63 @@
+import os
 import re
-import requests
+from time import sleep
+
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
+import requests
+import sweetviz as sw
+import torch
+from dotenv import load_dotenv
+from transformers import pipeline
+
+load_dotenv()
 
 
 class AddressExtractor:
-    def __init__(self, api_key: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        addresses: str = "/content/drive/MyDrive/saved_datasets/VolgaIT_2024_semifinal/volgait2024-semifinal-addresses.csv",
+        tasks: str = "/content/drive/MyDrive/saved_datasets/VolgaIT_2024_semifinal/volgait2024-semifinal-task.csv",
+    ) -> None:
         self.api_key = api_key
         self.base_url = "https://api.groq.com/openai/v1/chat/completions"
+        self.addresses = pd.read_csv(addresses, delimiter=";")
+        self.tasks = pd.read_csv(tasks, delimiter=";")
 
     def get_postprocess_text(self, text: str) -> str:
         """Preprocess the output text for address extraction."""
         text = text.lower()
-        text = re.sub(r'\bпос\.?\b', 'поселок', text)  # "пос." or "пос"
-        text = re.sub(r'\bп\.?\b', 'поселок', text)   # "п." or "п"
-        text = re.sub(r'\bул\.?\b', 'улица', text)    # "ул." or "ул"
-        text = re.sub(r'\bпер\.?\b', 'переулок', text)  # "пер." or "пер"
-        text = re.sub(r'\bобл\.?\b', 'область', text)   # "обл." or "обл"
+        text = re.sub(r"\bпос\.?\b", "поселок", text)  # "пос." or "пос"
+        text = re.sub(r"\bп\.?\b", "поселок", text)  # "п." or "п"
+        text = re.sub(r"\bул\.?\b", "улица", text)  # "ул." or "ул"
+        text = re.sub(r"\bпер\.?\b", "переулок", text)  # "пер." or "пер"
+        text = re.sub(r"\bобл\.?\b", "область", text)  # "обл." or "обл"
         return text
+
+    def query_local_model(self, prompt: list[dict[str, str]]) -> dict:
+        """Query the local model with the given prompt."""
+        # Load the model
+        pipe = pipeline(
+            "text-generation",
+            model="Vikhrmodels/Vikhr-Llama-3.2-1B-Instruct-abliterated",
+        )
+
+        response = pipe(prompt)
+
+        return response
 
     def query_groq(self, prompt: list[dict[str, str]]) -> dict:
         """Query the Groq API with the given prompt."""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
         data = {
             "model": "llama-3.1-70b-versatile",
             "messages": prompt,
-            "max_tokens": 500
+            "max_tokens": 500,
         }
 
         response = requests.post(self.base_url, headers=headers, json=data)
@@ -53,6 +83,7 @@ class AddressExtractor:
                           5. Будь внимателен к пробелам и пунктуации.
                           6. В ответе пиши только адреса без своих комментариев.
                           7. Если написано число1-число2, то это все числа от числа1 до числа2 должны быть.
+                          8. Если нет упоминаний адресов, то ВООБЩЕ ничего не пиши
 
                           Пример:
                           Текст: "из п/з Д=100, без ХВС К. Либкнехта 21, 23, 23а 25"
@@ -77,64 +108,76 @@ class AddressExtractor:
 
                           Теперь, пожалуйста, извлеки адреса из следующего комментария: {comment}"""
 
-
         messages = [
             {"role": "system", "content": template},
-            {"role": "user", "content": comment}
+            {"role": "user", "content": comment},
         ]
 
         return messages
 
     def extract_uuids(self, text: str) -> str:
-        uuids = ''
+        uuids = []
         ext_addresses = self.extract_addresses_from_comment(text)
 
-        for address in ext_addresses.split('\n'):
-            address_type, number = address.split(',')
-            matches_houses = self.find_match_house_uuid(self.addresses, address_type, number)
-            uuids += matches_houses + ','
+        for address in ext_addresses.split("\n"):
+            try:
+                address_type, number = address.split(",")
+                matches_houses = self.find_match_house_uuid(
+                    self.addresses, address_type, number
+                )
+                if matches_houses != "":
+                    uuids.append(matches_houses)
+            except ValueError:
+                continue
 
-        return uuids[:-1]
-
+        print(",".join(uuids), end="\n\n")
+        return ",".join(uuids)
 
     def extract_addresses_from_comment(self, comment: str) -> str:
         """Extract addresses from a given comment."""
         prompt = self.create_prompt(comment)
         response = self.query_groq(prompt)
-
-        return response['choices'][0]['message']['content']
-
+        # response = self.query_local_model(prompt)
+        sleep(1)
+        return response["choices"][0]["message"]["content"]
 
     def find_match_house_uuid(self, df: pd.DataFrame, street: str, house_number: str):
         # Убираем лишние пробелы и приводим к нижнему регистру
         street = street.strip().lower()
 
         # Фильтрация DataFrame с использованием регулярных выражений
-        mask = (
-            df['house_full_address'].str.contains(r'\b' + re.escape(street), case=False) &
-            df['house_full_address'].str.contains(
-                r'(?<!\d)' + re.escape(house_number) + r'(?![\w\S])', case=False  # Поиск номера как отдельного слова
-            )
+        mask = df["house_full_address"].str.contains(
+            r"\b" + re.escape(street), case=False
+        ) & df["house_full_address"].str.contains(
+            r"(?<!\d)" + re.escape(house_number) + r"(?![\w\S])",
+            case=False,  # Поиск номера как отдельного слова
         )
 
         # Получение house_uuid по маске
-        matching_houses = df.loc[mask, 'house_uuid'].tolist()
+        matching_houses = df.loc[mask, "house_uuid"].tolist()
 
-        return ','.join(matching_houses)
-
-
+        return ",".join(matching_houses)
 
 
 def main():
-    addresses = pd.read_csv('/content/drive/MyDrive/saved_datasets/VolgaIT_2024_semifinal/volgait2024-semifinal-addresses.csv', delimiter=';')
-    tasks = pd.read_csv('/content/drive/MyDrive/saved_datasets/VolgaIT_2024_semifinal/volgait2024-semifinal-task.csv', delimiter=';')
-    extractor = AddressExtractor(userdata.get('qroq'))
+    api_groq = os.getenv("API_GROQ", "")
+    extractor = AddressExtractor(
+        api_key=api_groq,
+        addresses="./data/volgait2024-semifinal-addresses.csv",
+        tasks="./data/volgait2024-semifinal-task.csv",
+    )
+    extractor.tasks["house_uuid"] = extractor.tasks["comment"].apply(
+        extractor.extract_uuids
+    )
 
+    extractor.tasks = extractor.tasks[["shutdown_id", "house_uuid"]]
+    extractor.tasks.to_csv(
+        "./data/volgait2024-semifinal-result.csv",
+        encoding="utf-8",
+        delimiter=";",
+        index=False,
+    )
 
-    for task in tasks['comment']:
-        uuids = ''
-        test_text = tasks.iloc[0]['comment']
-        
 
 if __name__ == "__main__":
-  main()
+    main()

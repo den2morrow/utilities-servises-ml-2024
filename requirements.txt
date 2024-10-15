@@ -2,9 +2,5 @@ requests
 python-dotenv
 
 
-numpy
-torch
 pandas
-sweetviz
-matplotlib
 transformers

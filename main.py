@@ -2,12 +2,8 @@ import os
 import re
 from time import sleep
 
-import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 import requests
-import sweetviz as sw
-import torch
 from dotenv import load_dotenv
 from transformers import pipeline
 

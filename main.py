@@ -1,13 +1,36 @@
+#@title Download librarys, login HuggingFace, Ignore warnings
+# !pip install sweetviz transformers langchain huggingface_hub python-dotenv -q
+#########################
+
+
 import os
 import re
-from time import sleep
+import csv
+from random import randint
+from time import sleep, time
+from tqdm import tqdm
 
 import pandas as pd
 import requests
 from dotenv import load_dotenv
 from transformers import pipeline
 
+#@title Get Google Secrets Keys
+from google.colab import userdata
+##############################
+
+#@title Login in HuggingFace
+from huggingface_hub import login
+############################
+
+#@title Ignore warnings
+import warnings
+#######################
+
+
 load_dotenv()
+login(os.getenv('HUG_FACE_API_KEY'))   # login(userdata.get('hugface'))
+warnings.filterwarnings('ignore')
 
 
 class AddressExtractor:
@@ -35,14 +58,22 @@ class AddressExtractor:
     def query_local_model(self, prompt: list[dict[str, str]]) -> dict:
         """Query the local model with the given prompt."""
         # Load the model
-        pipe = pipeline(
-            "text-generation",
-            model="Vikhrmodels/Vikhr-Llama-3.2-1B-Instruct-abliterated",
-        )
+        # pipe = pipeline(
+        #     "text-generation",
+        #     model="Vikhrmodels/Vikhr-Llama-3.2-1B-Instruct-abliterated",
+        # )
+        pipe = pipeline("text-generation",
+                        model="Vikhrmodels/Vikhr-Llama-3.2-1B-Instruct",
+                        device_map='auto',
+                        do_sample=False,
+                        # temperature=0.5,
+                        # top_k=50
+                        # top_p=0.95,
+                        )
 
-        response = pipe(prompt)
+        response = pipe(prompt, max_new_tokens=512)
 
-        return response
+        return response[0]["generated_text"][2]['content']
 
     def query_groq(self, prompt: list[dict[str, str]]) -> dict:
         """Query the Groq API with the given prompt."""
@@ -56,10 +87,10 @@ class AddressExtractor:
             "max_tokens": 500,
         }
 
-        response = requests.post(self.base_url, headers=headers, json=data)
+        response = requests.post(self.base_url, headers=headers, json=data, verify=False)
 
         if response.status_code == 200:
-            return response.json()
+            return response.json()["choices"][0]["message"]["content"]
         else:
             raise Exception(f"Error: {response.status_code}, {response.text}")
 
@@ -80,6 +111,7 @@ class AddressExtractor:
                           6. В ответе пиши только адреса без своих комментариев.
                           7. Если написано число1-число2, то это все числа от числа1 до числа2 должны быть.
                           8. Если нет упоминаний адресов, то ВООБЩЕ ничего не пиши
+                          9. Город, область, край, страну не указывай
 
                           Пример:
                           Текст: "из п/з Д=100, без ХВС К. Либкнехта 21, 23, 23а 25"
@@ -111,11 +143,11 @@ class AddressExtractor:
 
         return messages
 
-    def extract_uuids(self, text: str) -> str:
+    def extract_and_save_uuids(self, text: str) -> str:
         uuids = []
         ext_addresses = self.extract_addresses_from_comment(text)
 
-        for address in ext_addresses.split("\n"):
+        for address in ext_addresses.split("\n"):  # was tqdm(...)
             try:
                 address_type, number = address.split(",")
                 matches_houses = self.find_match_house_uuid(
@@ -126,16 +158,26 @@ class AddressExtractor:
             except ValueError:
                 continue
 
-        print(",".join(uuids), end="\n\n")
+        with open('./data/volgait2024-semifinal-house-uuids.csv', mode='a',
+                newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile, delimiter=';')
+
+                # Записываем заголовки столбцов, если файл пустой
+                if csvfile.tell() == 0:
+                    writer.writerow(["house_uuid"])
+                
+                writer.writerow([",".join(uuids) + '\n'])
+        
         return ",".join(uuids)
 
     def extract_addresses_from_comment(self, comment: str) -> str:
         """Extract addresses from a given comment."""
+        sleep(randint(2, 5))
         prompt = self.create_prompt(comment)
-        response = self.query_groq(prompt)
-        # response = self.query_local_model(prompt)
-        sleep(1)
-        return response["choices"][0]["message"]["content"]
+        # response = self.query_groq(prompt)
+        response = self.query_local_model(prompt)
+
+        return response
 
     def find_match_house_uuid(self, df: pd.DataFrame, street: str, house_number: str):
         # Убираем лишние пробелы и приводим к нижнему регистру
@@ -155,25 +197,31 @@ class AddressExtractor:
         return ",".join(matching_houses)
 
 
+
 def main():
+
+    tqdm.pandas()
+
     api_groq = os.getenv("API_GROQ", "")
+    api_groq = api_groq if api_groq != "" else userdata.get('qroq')
     extractor = AddressExtractor(
         api_key=api_groq,
-        addresses="./data/volgait2024-semifinal-addresses.csv",
-        tasks="./data/volgait2024-semifinal-task.csv",
-    )
-    extractor.tasks["house_uuid"] = extractor.tasks["comment"].apply(
-        extractor.extract_uuids
+        addresses='/content/drive/MyDrive/saved_datasets/VolgaIT_2024_semifinal/volgait2024-semifinal-addresses.csv',
+        tasks='/content/drive/MyDrive/saved_datasets/VolgaIT_2024_semifinal/volgait2024-semifinal-task.csv')
+
+    extractor.tasks.iloc[0:]["comment"].progress_apply(
+        extractor.extract_and_save_uuids
     )
 
-    extractor.tasks = extractor.tasks[["shutdown_id", "house_uuid"]]
-    extractor.tasks.to_csv(
-        "./data/volgait2024-semifinal-result.csv",
-        encoding="utf-8",
-        delimiter=";",
-        index=False,
-    )
+    shutdown_id_col = extractor.tasks[['shutdown_id']]
+    house_uuid_col = pd.read_csv('./data/volgait2024-semifinal-house-uuids.csv',
+                                 delimiter=';',
+                                 encoding='utf-8')
+    result = pd.concat([shutdown_id_col, house_uuid_col], ignore_index=True)
+    result.to_csv('./data/volgait2024-semifinal-result.csv', encoding='utf-8', index=False)
 
 
 if __name__ == "__main__":
+    start_time = time()
     main()
+    print(f"Work time: {time() - start_time}")

@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from transformers import pipeline
 
 #@title Get Google Secrets Keys
-from google.colab import userdata
+# from google.colab import userdata
 ##############################
 
 #@title Login in HuggingFace
@@ -37,8 +37,8 @@ class AddressExtractor:
     def __init__(
         self,
         api_key: str,
-        addresses: str = "/content/drive/MyDrive/saved_datasets/VolgaIT_2024_semifinal/volgait2024-semifinal-addresses.csv",
-        tasks: str = "/content/drive/MyDrive/saved_datasets/VolgaIT_2024_semifinal/volgait2024-semifinal-task.csv",
+        addresses: str = "./data/volgait2024-semifinal-addresses.csv",
+        tasks: str = "./data/volgait2024-semifinal-task.csv",
     ) -> None:
         self.api_key = api_key
         self.base_url = "https://api.groq.com/openai/v1/chat/completions"
@@ -203,11 +203,11 @@ def main():
     tqdm.pandas()
 
     api_groq = os.getenv("API_GROQ", "")
-    api_groq = api_groq if api_groq != "" else userdata.get('qroq')
+    # api_groq = api_groq if api_groq != "" else userdata.get('qroq')
     extractor = AddressExtractor(
-        api_key=api_groq,
-        addresses='/content/drive/MyDrive/saved_datasets/VolgaIT_2024_semifinal/volgait2024-semifinal-addresses.csv',
-        tasks='/content/drive/MyDrive/saved_datasets/VolgaIT_2024_semifinal/volgait2024-semifinal-task.csv')
+        api_key=api_groq)
+        # addresses='/content/drive/MyDrive/saved_datasets/VolgaIT_2024_semifinal/volgait2024-semifinal-addresses.csv',
+        # tasks='/content/drive/MyDrive/saved_datasets/VolgaIT_2024_semifinal/volgait2024-semifinal-task.csv')
 
     extractor.tasks.iloc[0:]["comment"].progress_apply(
         extractor.extract_and_save_uuids

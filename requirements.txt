@@ -1,6 +1,8 @@
 requests
 python-dotenv
 
-
+torch
 pandas
 transformers
+huggingface_hub
+accelerate
